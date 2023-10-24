@@ -5,13 +5,17 @@ const axios = require('axios');
 
 app.use(express.json());
 
-// creates an error message object
-function createErrorMessage(code, message) {
-  return {
-    code,
-    message,
+app.use((req, res, next) => {
+  const incomingMessage = {
+    type: 'messageIn',
+    body: JSON.stringify(req.body),
+    method: req.method,
+    path: req.url,
+    dateTime: new Date(),
   };
-}
+  console.log(`Incoming: ${JSON.stringify(incomingMessage)}`);
+  next();
+});
 
 // Validates the given request returns the result of validation or the caught error
 function validateRequest(request) {
@@ -23,53 +27,98 @@ function validateRequest(request) {
   return schema.validate(request);
 }
 
-// calls the external api, returns the response or null if there was an error.
+// calls the external api, returns the response or throws an error.
 async function callAPI(query, skip) {
   try {
     const response = await axios.get(`https://dummyjson.com/products/search?q=${query}&limit=2&skip=${skip}`);
     const responseData = response.data;
     return responseData;
   } catch (error) {
-    return null;
+    throw error;
   }
 }
 
 
-app.post('/api/products', async (req, res) => {
-  // Validate the request.
-  const result = validateRequest(req.body);
-  if (result.error) {
-    const errorResponse = createErrorMessage(400, result.error.details[0].message);
-    res.status(400).json(errorResponse);
+app.post('/api/products', async (req, res, next) => {
+  // Validate the request
+  try {
+    const result = validateRequest(req.body);
+    if (result.error) {
+      const errorMessage = result.error.details[0].message;
+      const error = new Error(errorMessage);
+      error.status = 400;
+      throw error;
+    }
+    // Make a request to dummyjson.com
+    const skip = (result.value.page - 1) * 2;
+    const query = (result.value.query);
+    // Send the request
+    const responseData = await callAPI(query, skip);
+    if (!responseData) {
+      const errorMessage = 'Failed to fetch products from the online API';
+      const error = new Error(errorMessage);
+      error.status = 500;
+      throw error;
+    }
+    if (!responseData.products.length) {
+      const errorMessage = 'No products found that match the given parameters';
+      const error = new Error(errorMessage);
+      error.status = 404;
+      throw error;
+    }
+    // Trasnsform the data
+    const transformedProducts = responseData.products.map(product => ({
+      title: product.title,
+      description: product.description,
+      "final price": +(product.price - (product.price * product.discountPercentage / 100)).toFixed(2) // + converts the result into a number
+    }));
+    res.json(transformedProducts);
+    const outgoingMessage = {
+      type: 'messageOut',
+      body: JSON.stringify(transformedProducts),
+      dateTime: new Date(),
+    };
+    console.log(`Outgoing: ${JSON.stringify(outgoingMessage)}`);
     return;
   }
-  // Make a request to dummyjson.com
-  const skip = (result.value.page - 1) * 2;
-  const query = (result.value.query);
-  console.log(skip);
-  console.log(result.value.page - 1);
-  // Send the request
-  const responseData = await callAPI(query, skip);
-  if (!responseData) {
-    const errorResponse = createErrorMessage(500, 'Failed to fetch products from the online API');
-    res.status(500).json(errorResponse);
-    return;
+  catch (error) {
+    next(error);
   }
-  if (!responseData.products.length) {
-    const errorResponse = createErrorMessage(404, 'No products found that match the given parameters');
-    res.status(404).json(errorResponse);
-    return;
+});
+
+// from https://expressjs.com/en/guide/error-handling.html
+app.use((err, req, res, next) => {
+  // Set a default status code if not provided
+  const statusCode = err.status || 500;
+  // Prepare the response
+  const errorResponse = {
+    code: statusCode,
+    message: err.message,
+  };
+
+  res.status(statusCode).json(errorResponse);
+
+  // Information that will be passed to logging middleware
+  req.errorToLog = {
+    fault: err.stack,
+    body: errorResponse
+  };
+  if (statusCode >= 400) {
+    req.errorToLog.fault = err.stack;
   }
-  // trasnsform the data
-  const transformedProducts = responseData.products.map(product => ({
-    title: product.title,
-    description: product.description,
-    "final price": +(product.price - (product.price * product.discountPercentage / 100)).toFixed(2) // + converts the result into a number
-  }));
+  next();
+});
 
-  res.json(transformedProducts);
-
-
+app.use((req, res, next) => {
+  // if there response is with an error
+  const outgoingMessage = {
+    type: 'messageOut',
+    body: JSON.stringify(req.errorToLog.body),
+    dateTime: new Date(),
+    fault: req.errorToLog.fault
+  };
+  console.log(`Outgoing: ${JSON.stringify(outgoingMessage)}`);
+  return;
 });
 
 const port = process.env.PORT || 3000;
