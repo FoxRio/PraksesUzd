@@ -9,16 +9,13 @@ app.use(express.json());
 app.use((req, res, next) => {
   if (req.get('Content-Type') === 'application/xml') {
     let xmlData = '';
-
     req.setEncoding('utf8');
-
     req.on('data', (chunk) => {
       xmlData += chunk;
     });
 
     req.on('end', () => {
       const parser = new xml2js.Parser();
-
       parser.parseString(xmlData, (err, result) => {
         if (err) {
           const errorMessage = 'Invalid XML data';
@@ -26,7 +23,6 @@ app.use((req, res, next) => {
           error.status = 400;
           next(error);
         } else {
-
           if (!result.root.page) result.root.page = 1;
           if (result.root && result.root.query) {
             const transformedJSON = {
@@ -69,7 +65,6 @@ function validateRequest(request) {
     query: Joi.string().min(3).max(10).required(),
     page: Joi.number().integer().min(1).default(1),
   });
-
   return schema.validate(request);
 }
 
@@ -86,8 +81,8 @@ async function callAPI(query, skip) {
 
 
 app.post('/api/products', async (req, res, next) => {
-  // Validate the request
   try {
+    // Validate the request
     const result = validateRequest(req.body);
     if (result.error) {
       const errorMessage = result.error.details[0].message;
@@ -120,15 +115,12 @@ app.post('/api/products', async (req, res, next) => {
     }));
     if (req.headers.accept === 'application/xml') {
       const builder = new xml2js.Builder();
-      console.log(transformedProducts);
       const xmlRes = builder.buildObject(transformedProducts);
-      console.log("here");
       res.set('Content-Type', 'application/xml');
       res.send(xmlRes);
     } else {
       res.json(transformedProducts);
     }
-
     const outgoingMessage = {
       type: 'messageOut',
       body: JSON.stringify(transformedProducts),
