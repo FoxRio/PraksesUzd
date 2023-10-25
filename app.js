@@ -2,8 +2,54 @@ const express = require('express');
 const app = express();
 const Joi = require('joi');
 const axios = require('axios');
+const xml2js = require('xml2js');
 
 app.use(express.json());
+
+app.use((req, res, next) => {
+  if (req.get('Content-Type') === 'application/xml') {
+    let xmlData = '';
+
+    req.setEncoding('utf8');
+
+    req.on('data', (chunk) => {
+      xmlData += chunk;
+    });
+
+    req.on('end', () => {
+      const parser = new xml2js.Parser();
+
+      parser.parseString(xmlData, (err, result) => {
+        if (err) {
+          const errorMessage = 'Invalid XML data';
+          const error = new Error(errorMessage);
+          error.status = 400;
+          next(error);
+        } else {
+
+          if (!result.root.page) result.root.page = 1;
+          if (result.root && result.root.query) {
+            const transformedJSON = {
+              query: result.root.query[0],
+              page: parseInt(result.root.page, 10),
+            };
+            req.body = transformedJSON;
+            req.headers['content-type'] = 'application/json'; // Update the Content-Type header
+          } else {
+            const errorMessage = 'Query field is required.';
+            const error = new Error(errorMessage);
+            error.status = 400;
+            next(error);
+          }
+          next();
+        }
+      });
+    });
+  } else {
+    next();
+  }
+});
+
 
 app.use((req, res, next) => {
   const incomingMessage = {
@@ -70,9 +116,19 @@ app.post('/api/products', async (req, res, next) => {
     const transformedProducts = responseData.products.map(product => ({
       title: product.title,
       description: product.description,
-      "final price": +(product.price - (product.price * product.discountPercentage / 100)).toFixed(2) // + converts the result into a number
+      "finalPrice": +(product.price - (product.price * product.discountPercentage / 100)).toFixed(2) // + converts the result into a number
     }));
-    res.json(transformedProducts);
+    if (req.headers.accept === 'application/xml') {
+      const builder = new xml2js.Builder();
+      console.log(transformedProducts);
+      const xmlRes = builder.buildObject(transformedProducts);
+      console.log("here");
+      res.set('Content-Type', 'application/xml');
+      res.send(xmlRes);
+    } else {
+      res.json(transformedProducts);
+    }
+
     const outgoingMessage = {
       type: 'messageOut',
       body: JSON.stringify(transformedProducts),
@@ -88,15 +144,21 @@ app.post('/api/products', async (req, res, next) => {
 
 // from https://expressjs.com/en/guide/error-handling.html
 app.use((err, req, res, next) => {
-  // Set a default status code if not provided
   const statusCode = err.status || 500;
-  // Prepare the response
   const errorResponse = {
     code: statusCode,
     message: err.message,
   };
 
-  res.status(statusCode).json(errorResponse);
+  if (req.headers.accept === 'application/xml') {
+    const builder = new xml2js.Builder();
+    const xmlError = builder.buildObject(errorResponse);
+    res.set('Content-Type', 'application/xml');
+    // Send the XML error response
+    res.status(statusCode).send(xmlError);
+  } else {
+    res.status(statusCode).json(errorResponse);
+  }
 
   // Information that will be passed to logging middleware
   req.errorToLog = {
@@ -109,6 +171,7 @@ app.use((err, req, res, next) => {
   next();
 });
 
+
 app.use((req, res, next) => {
   // if there response is with an error
   const outgoingMessage = {
@@ -120,6 +183,5 @@ app.use((req, res, next) => {
   console.log(`Outgoing: ${JSON.stringify(outgoingMessage)}`);
   return;
 });
-
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`Listening to port ${port}`));
